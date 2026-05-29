@@ -99,6 +99,7 @@
       <input type="range" id="pointMode" min="0" max="1" step="1" value="0" />
     </div>
     <button class="cta" id="modeBtn" style="justify-content:center">🚶 Recorrer el espacio</button>
+    <button class="cta" id="isoBtn" style="justify-content:center">📐 Vista isométrica</button>
     <button class="cta" id="newPhoto" style="justify-content:center">Otra foto</button>
     <div class="hint" id="navHint">Arrastra para orbitar · rueda para acercar</div>
   </div>
@@ -180,6 +181,25 @@ orbit.dampingFactor = 0.08;
 orbit.minDistance = 0.6;
 orbit.maxDistance = 6;
 
+// ---- Cámara isométrica (ortográfica) ----
+const ISO_FRUSTUM = 3.6;                 // tamaño del encuadre (cubre el plano de ~2u con margen)
+const ISO_DIR = new THREE.Vector3(0.8, 0.8, 1.0).normalize(); // vantage 3/4 iso
+const isoCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
+function updateIsoFrustum() {
+  const a = innerWidth / innerHeight;
+  isoCam.left = -ISO_FRUSTUM * a / 2;
+  isoCam.right = ISO_FRUSTUM * a / 2;
+  isoCam.top = ISO_FRUSTUM / 2;
+  isoCam.bottom = -ISO_FRUSTUM / 2;
+  isoCam.updateProjectionMatrix();
+}
+updateIsoFrustum();
+const isoOrbit = new OrbitControls(isoCam, renderer.domElement);
+isoOrbit.enableDamping = true;
+isoOrbit.dampingFactor = 0.08;
+isoOrbit.enablePan = true;
+isoOrbit.enabled = false;                // sólo activo en modo iso
+
 scene.add(new THREE.AmbientLight(0xffffff, 1.0));
 
 let meshObj = null;     // current THREE.Mesh
@@ -189,12 +209,13 @@ let lastData = null;    // { tex, depth, w, h }
 addEventListener("resize", () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
+  updateIsoFrustum();
   renderer.setSize(innerWidth, innerHeight);
 });
 
 // ---- Recorrido en primera persona (walk) ----
 const clock = new THREE.Clock();
-let mode = "orbit";          // "orbit" | "walk"
+let mode = "orbit";          // "orbit" | "walk" | "iso"
 let yaw = 0, pitch = 0;      // orientación en modo walk (radianes)
 const keys = Object.create(null);
 const pad = { f: 0, b: 0, l: 0, r: 0 };  // botones táctiles
@@ -208,10 +229,12 @@ function clampPitch() { pitch = Math.max(-1.45, Math.min(1.45, pitch)); }
 function enterWalk() {
   mode = "walk";
   orbit.enabled = false;
+  isoOrbit.enabled = false;
   const e = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
   yaw = e.y; pitch = e.x;
   document.body.classList.add("walk");
   modeBtn.textContent = "🛰️ Volver a orbitar";
+  isoBtn.textContent = "📐 Vista isométrica";
   navHint.innerHTML = isTouch
     ? "Arrastra para mirar · flechas para moverte"
     : "Clic para mirar · WASD/flechas para moverte · Esc suelta el ratón";
@@ -220,18 +243,41 @@ function enterWalk() {
 function enterOrbit() {
   mode = "orbit";
   orbit.enabled = true;
+  isoOrbit.enabled = false;
   camera.getWorldDirection(_dir);
   orbit.target.copy(camera.position).addScaledVector(_dir, 1.2);
   document.body.classList.remove("walk");
   if (document.pointerLockElement) document.exitPointerLock();
   modeBtn.textContent = "🚶 Recorrer el espacio";
+  isoBtn.textContent = "📐 Vista isométrica";
   navHint.textContent = "Arrastra para orbitar · rueda para acercar";
+}
+
+function enterIso() {
+  mode = "iso";
+  orbit.enabled = false;
+  isoOrbit.enabled = true;
+  document.body.classList.remove("walk");
+  if (document.pointerLockElement) document.exitPointerLock();
+  // colocar la cámara ortográfica en el vantage isométrico mirando al centro
+  isoOrbit.target.set(0, 0, 0);
+  isoCam.position.copy(ISO_DIR).multiplyScalar(6);
+  isoCam.up.set(0, 1, 0);
+  isoCam.lookAt(0, 0, 0);
+  isoCam.zoom = 1;
+  updateIsoFrustum();
+  isoOrbit.update();
+  modeBtn.textContent = "🚶 Recorrer el espacio";
+  isoBtn.textContent = "🛰️ Volver a orbitar";
+  navHint.textContent = "Vista isométrica · arrastra para girar · rueda para zoom";
 }
 
 const isTouch = matchMedia("(pointer: coarse)").matches || "ontouchstart" in window;
 const modeBtn = document.getElementById("modeBtn");
+const isoBtn = document.getElementById("isoBtn");
 const navHint = document.getElementById("navHint");
-modeBtn.onclick = () => (mode === "orbit" ? enterWalk() : enterOrbit());
+modeBtn.onclick = () => (mode === "walk" ? enterOrbit() : enterWalk());
+isoBtn.onclick = () => (mode === "iso" ? enterOrbit() : enterIso());
 
 // mirar con ratón (pointer lock en escritorio)
 const canvasEl = renderer.domElement;
@@ -277,6 +323,8 @@ document.querySelectorAll(".navpad button").forEach((b) => {
   const dt = Math.min(clock.getDelta(), 0.05);
   if (mode === "orbit") {
     orbit.update();
+  } else if (mode === "iso") {
+    isoOrbit.update();
   } else {
     _euler.set(pitch, yaw, 0);
     camera.quaternion.setFromEuler(_euler);
@@ -290,7 +338,7 @@ document.querySelectorAll(".navpad button").forEach((b) => {
       camera.position.addScaledVector(_right, strafe * step);
     }
   }
-  renderer.render(scene, camera);
+  renderer.render(scene, mode === "iso" ? isoCam : camera);
 })();
 
 // ---- Depth model (lazy) ----
