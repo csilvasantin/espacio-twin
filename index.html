@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex" />
+<title>Gemelo del espacio · XpaceOS</title>
+<style>
+  :root {
+    --spine: #50c8ff;
+    --spine-soft: rgba(80, 200, 255, 0.15);
+    --bg: #060a12;
+    --panel: rgba(14, 22, 34, 0.85);
+    --ink: #e8f1fb;
+    --muted: #8fa6bd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; overflow: hidden; }
+  #stage { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  .hud { position: fixed; z-index: 10; }
+  .top { top: 18px; left: 18px; right: 18px; display: flex; align-items: center;
+    justify-content: space-between; gap: 16px; pointer-events: none; }
+  .brand { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
+  .spine-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--spine);
+    box-shadow: 0 0 14px var(--spine); }
+  .brand b { font-weight: 650; letter-spacing: .3px; }
+  .brand span { color: var(--muted); font-size: 13px; }
+
+  .panel { pointer-events: auto; background: var(--panel); backdrop-filter: blur(10px);
+    border: 1px solid var(--spine-soft); border-radius: 14px; padding: 14px 16px; }
+
+  .controls { bottom: 18px; left: 18px; display: flex; flex-direction: column; gap: 12px;
+    width: 280px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .row label { font-size: 13px; color: var(--muted); }
+  input[type="range"] { width: 150px; accent-color: var(--spine); }
+
+  .drop { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center;
+    justify-content: center; flex-direction: column; gap: 18px; text-align: center;
+    background: radial-gradient(circle at 50% 40%, rgba(80,200,255,.08), transparent 60%); }
+  .drop.hide { display: none; }
+  .drop h1 { font-size: 26px; margin: 0; font-weight: 650; }
+  .drop p { color: var(--muted); margin: 0; max-width: 420px; line-height: 1.5; }
+  .cta { display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
+    border: 1px solid var(--spine); color: var(--spine); padding: 12px 22px; border-radius: 999px;
+    font-size: 15px; transition: .2s; background: transparent; }
+  .cta:hover { background: var(--spine); color: #04121d; box-shadow: 0 0 24px var(--spine-soft); }
+  .dz { border: 1.5px dashed var(--spine-soft); border-radius: 18px; padding: 40px 48px;
+    display: flex; flex-direction: column; gap: 18px; align-items: center; }
+  .dz.over { border-color: var(--spine); background: var(--spine-soft); }
+
+  .status { position: fixed; bottom: 18px; right: 18px; z-index: 10; font-size: 13px;
+    color: var(--muted); display: flex; align-items: center; gap: 10px; }
+  .status .spine-dot.busy { animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+  .badge { font-size: 11px; color: var(--spine); border: 1px solid var(--spine-soft);
+    padding: 3px 8px; border-radius: 999px; }
+  .hint { font-size: 12px; color: var(--muted); }
+  input[type="file"] { display: none; }
+
+  .navpad { position: fixed; right: 22px; bottom: 84px; z-index: 15; display: none;
+    grid-template-columns: repeat(3, 54px); grid-template-rows: repeat(3, 54px); gap: 6px; }
+  body.walk .navpad { display: grid; }
+  .navpad button { background: var(--panel); backdrop-filter: blur(10px);
+    border: 1px solid var(--spine-soft); color: var(--spine); border-radius: 12px;
+    font-size: 20px; cursor: pointer; -webkit-user-select: none; user-select: none;
+    touch-action: none; padding: 0; }
+  .navpad button:active { background: var(--spine); color: #04121d; }
+  .np-f { grid-area: 1 / 2; } .np-l { grid-area: 2 / 1; }
+  .np-b { grid-area: 3 / 2; } .np-r { grid-area: 2 / 3; }
+</style>
+</head>
+<body>
+  <div id="stage"></div>
+
+  <div class="hud top">
+    <div class="brand">
+      <span class="spine-dot"></span>
+      <b>Gemelo del espacio</b>
+      <span>· XpaceOS</span>
+    </div>
+    <div class="badge">PROTOTIPO · 1 foto → 2.5D</div>
+  </div>
+
+  <div class="hud controls panel" id="controls" style="display:none">
+    <div class="row">
+      <label>Relieve</label>
+      <input type="range" id="depthScale" min="0" max="3" step="0.05" value="1.1" />
+    </div>
+    <div class="row">
+      <label>Suavizado</label>
+      <input type="range" id="smooth" min="0" max="4" step="1" value="1" />
+    </div>
+    <div class="row">
+      <label>Nube de puntos</label>
+      <input type="range" id="pointMode" min="0" max="1" step="1" value="0" />
+    </div>
+    <button class="cta" id="modeBtn" style="justify-content:center">🚶 Recorrer el espacio</button>
+    <button class="cta" id="newPhoto" style="justify-content:center">Otra foto</button>
+    <div class="hint" id="navHint">Arrastra para orbitar · rueda para acercar</div>
+  </div>
+
+  <div class="navpad" id="navpad">
+    <button class="np-f" data-move="f">▲</button>
+    <button class="np-l" data-move="l">◀</button>
+    <button class="np-b" data-move="b">▼</button>
+    <button class="np-r" data-move="r">▶</button>
+  </div>
+
+  <div class="drop" id="drop">
+    <h1>Convierte una foto en su gemelo digital</h1>
+    <p>Sube una foto de tu local. La profundidad se calcula en tu propio navegador
+       (sin servidor) y se reconstruye el relieve 3D del espacio.</p>
+    <div class="dz" id="dz">
+      <button class="cta" id="pick">Elegir foto</button>
+      <span class="hint">o arrastra una imagen aquí</span>
+      <button class="cta" id="fromPhone" style="border-color:var(--muted);color:var(--muted)">📱 Importar desde móvil</button>
+    </div>
+    <input type="file" id="file" accept="image/*" />
+
+    <div class="dz" id="phonePanel" style="display:none; gap:14px;">
+      <div class="hint">Escanea el QR con el móvil (debe estar en la <b style="color:var(--spine)">misma WiFi</b>)</div>
+      <img id="qr" alt="QR" width="200" height="200"
+        style="border-radius:12px; background:#fff; padding:8px; display:none" />
+      <div class="hint">o abre en el navegador del móvil:</div>
+      <div id="phoneUrl" style="color:var(--spine); font-size:15px; word-break:break-all"></div>
+      <div class="hint" id="phoneWait">⏳ Esperando foto del móvil…</div>
+    </div>
+  </div>
+
+  <div class="status" id="status">
+    <span class="spine-dot" id="statusDot"></span>
+    <span id="statusText">Listo</span>
+  </div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+
+env.allowLocalModels = false;
+
+const statusText = document.getElementById("statusText");
+const statusDot = document.getElementById("statusDot");
+const drop = document.getElementById("drop");
+const dz = document.getElementById("dz");
+const controls = document.getElementById("controls");
+
+function setStatus(msg, busy = false) {
+  statusText.textContent = msg;
+  statusDot.classList.toggle("busy", busy);
+}
+
+// ---- Three.js scene ----
+const stage = document.getElementById("stage");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060a12);
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.01, 100);
+camera.position.set(0, 0, 2.4);
+
+const orbit = new OrbitControls(camera, renderer.domElement);
+orbit.enableDamping = true;
+orbit.dampingFactor = 0.08;
+orbit.minDistance = 0.6;
+orbit.maxDistance = 6;
+
+scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+let meshObj = null;     // current THREE.Mesh
+let pointsObj = null;   // current THREE.Points
+let lastData = null;    // { tex, depth, w, h }
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---- Recorrido en primera persona (walk) ----
+const clock = new THREE.Clock();
+let mode = "orbit";          // "orbit" | "walk"
+let yaw = 0, pitch = 0;      // orientación en modo walk (radianes)
+const keys = Object.create(null);
+const pad = { f: 0, b: 0, l: 0, r: 0 };  // botones táctiles
+const WALK_SPEED = 1.3;      // unidades/seg
+const _dir = new THREE.Vector3();
+const _right = new THREE.Vector3();
+const _euler = new THREE.Euler(0, 0, 0, "YXZ");
+
+function clampPitch() { pitch = Math.max(-1.45, Math.min(1.45, pitch)); }
+
+function enterWalk() {
+  mode = "walk";
+  orbit.enabled = false;
+  const e = new THREE.Euler().setFromQuaternion(camera.quaternion, "YXZ");
+  yaw = e.y; pitch = e.x;
+  document.body.classList.add("walk");
+  modeBtn.textContent = "🛰️ Volver a orbitar";
+  navHint.innerHTML = isTouch
+    ? "Arrastra para mirar · flechas para moverte"
+    : "Clic para mirar · WASD/flechas para moverte · Esc suelta el ratón";
+}
+
+function enterOrbit() {
+  mode = "orbit";
+  orbit.enabled = true;
+  camera.getWorldDirection(_dir);
+  orbit.target.copy(camera.position).addScaledVector(_dir, 1.2);
+  document.body.classList.remove("walk");
+  if (document.pointerLockElement) document.exitPointerLock();
+  modeBtn.textContent = "🚶 Recorrer el espacio";
+  navHint.textContent = "Arrastra para orbitar · rueda para acercar";
+}
+
+const isTouch = matchMedia("(pointer: coarse)").matches || "ontouchstart" in window;
+const modeBtn = document.getElementById("modeBtn");
+const navHint = document.getElementById("navHint");
+modeBtn.onclick = () => (mode === "orbit" ? enterWalk() : enterOrbit());
+
+// mirar con ratón (pointer lock en escritorio)
+const canvasEl = renderer.domElement;
+canvasEl.addEventListener("click", () => {
+  if (mode === "walk" && !isTouch && document.pointerLockElement !== canvasEl) canvasEl.requestPointerLock();
+});
+document.addEventListener("mousemove", (e) => {
+  if (mode === "walk" && document.pointerLockElement === canvasEl) {
+    yaw -= e.movementX * 0.0026; pitch -= e.movementY * 0.0026; clampPitch();
+  }
+});
+
+// mirar con el dedo (móvil)
+let lastT = null;
+canvasEl.addEventListener("touchstart", (e) => { if (mode === "walk") lastT = e.touches[0]; }, { passive: true });
+canvasEl.addEventListener("touchmove", (e) => {
+  if (mode === "walk" && lastT) {
+    const t = e.touches[0];
+    yaw -= (t.clientX - lastT.clientX) * 0.005;
+    pitch -= (t.clientY - lastT.clientY) * 0.005; clampPitch();
+    lastT = t; e.preventDefault();
+  }
+}, { passive: false });
+canvasEl.addEventListener("touchend", () => { lastT = null; });
+
+// teclado
+addEventListener("keydown", (e) => { keys[e.code] = true; });
+addEventListener("keyup", (e) => { keys[e.code] = false; });
+
+// pad táctil
+document.querySelectorAll(".navpad button").forEach((b) => {
+  const k = b.dataset.move;
+  const on = (e) => { e.preventDefault(); pad[k] = 1; };
+  const off = (e) => { e.preventDefault(); pad[k] = 0; };
+  b.addEventListener("pointerdown", on);
+  b.addEventListener("pointerup", off);
+  b.addEventListener("pointerleave", off);
+  b.addEventListener("pointercancel", off);
+});
+
+(function loop() {
+  requestAnimationFrame(loop);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (mode === "orbit") {
+    orbit.update();
+  } else {
+    _euler.set(pitch, yaw, 0);
+    camera.quaternion.setFromEuler(_euler);
+    const fwd = (keys.KeyW || keys.ArrowUp ? 1 : 0) - (keys.KeyS || keys.ArrowDown ? 1 : 0) + pad.f - pad.b;
+    const strafe = (keys.KeyD || keys.ArrowRight ? 1 : 0) - (keys.KeyA || keys.ArrowLeft ? 1 : 0) + pad.r - pad.l;
+    if (fwd || strafe) {
+      camera.getWorldDirection(_dir);
+      _right.crossVectors(_dir, camera.up).normalize();
+      const step = WALK_SPEED * dt;
+      camera.position.addScaledVector(_dir, fwd * step);
+      camera.position.addScaledVector(_right, strafe * step);
+    }
+  }
+  renderer.render(scene, camera);
+})();
+
+// ---- Depth model (lazy) ----
+let depthEstimator = null;
+async function getEstimator() {
+  if (depthEstimator) return depthEstimator;
+  setStatus("Cargando modelo de profundidad…", true);
+  const device = navigator.gpu ? "webgpu" : "wasm";
+  const dtype = "q8"; // cuantizado int8 → descarga ligera (~13 MB) en GPU y WASM
+  depthEstimator = await pipeline(
+    "depth-estimation",
+    "onnx-community/depth-anything-v2-small",
+    {
+      device, dtype,
+      progress_callback: (p) => {
+        if (p.status === "progress" && p.total) {
+          const pct = Math.round((p.loaded / p.total) * 100);
+          setStatus(`Descargando modelo… ${pct}%`, true);
+        } else if (p.status === "ready") {
+          setStatus("Modelo listo · estimando…", true);
+        }
+      }
+    }
+  );
+  return depthEstimator;
+}
+
+// ---- Build geometry from photo + depth ----
+const GRID = 256; // mesh resolution
+
+function smoothDepth(src, w, h, passes) {
+  let data = src;
+  for (let p = 0; p < passes; p++) {
+    const out = new Float32Array(data.length);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        let sum = 0, n = 0;
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const nx = x + dx, ny = y + dy;
+            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+            sum += data[ny * w + nx]; n++;
+          }
+        }
+        out[y * w + x] = sum / n;
+      }
+    }
+    data = out;
+  }
+  return data;
+}
+
+function buildScene() {
+  if (!lastData) return;
+  const { tex, depth, w, h } = lastData;
+  const scale = parseFloat(document.getElementById("depthScale").value);
+  const passes = parseInt(document.getElementById("smooth").value);
+  const asPoints = document.getElementById("pointMode").value === "1";
+
+  const dsm = passes > 0 ? smoothDepth(depth, w, h, passes) : depth;
+
+  const aspect = w / h;
+  const planeW = aspect >= 1 ? 2 : 2 * aspect;
+  const planeH = aspect >= 1 ? 2 / aspect : 2;
+
+  const geo = new THREE.PlaneGeometry(planeW, planeH, GRID, GRID);
+  const pos = geo.attributes.position;
+  const uv = geo.attributes.uv;
+  for (let i = 0; i < pos.count; i++) {
+    const u = uv.getX(i), v = uv.getY(i);
+    const px = Math.min(w - 1, Math.floor(u * (w - 1)));
+    const py = Math.min(h - 1, Math.floor((1 - v) * (h - 1)));
+    const d = dsm[py * w + px];           // 0 (lejos) … 1 (cerca)
+    pos.setZ(i, (d - 0.5) * scale);       // empuja hacia la cámara
+  }
+  geo.computeVertexNormals();
+
+  // limpiar lo anterior
+  if (meshObj) { scene.remove(meshObj); meshObj.geometry.dispose(); meshObj = null; }
+  if (pointsObj) { scene.remove(pointsObj); pointsObj.geometry.dispose(); pointsObj = null; }
+
+  if (asPoints) {
+    const mat = new THREE.PointsMaterial({ size: 0.006, map: tex, transparent: true });
+    pointsObj = new THREE.Points(geo, mat);
+    scene.add(pointsObj);
+  } else {
+    const mat = new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide });
+    meshObj = new THREE.Mesh(geo, mat);
+    scene.add(meshObj);
+  }
+}
+
+// ---- Pipeline: photo -> depth -> scene ----
+async function processImage(srcUrl) {
+  drop.classList.add("hide");
+  controls.style.display = "flex";
+
+  const estimator = await getEstimator();
+  setStatus("Estimando profundidad…", true);
+
+  const out = await estimator(srcUrl);
+  // out.depth: RawImage (grayscale). Normalizamos a 0..1
+  const di = out.depth;
+  const w = di.width, h = di.height;
+  const raw = di.data; // Uint8 grayscale (channels=1)
+  const ch = di.channels || 1;
+  const depth = new Float32Array(w * h);
+  let mn = Infinity, mx = -Infinity;
+  for (let i = 0; i < w * h; i++) {
+    const val = raw[i * ch];
+    depth[i] = val;
+    if (val < mn) mn = val;
+    if (val > mx) mx = val;
+  }
+  const range = mx - mn || 1;
+  for (let i = 0; i < depth.length; i++) depth[i] = (depth[i] - mn) / range;
+
+  // textura desde la foto original
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  await new Promise((res) => { img.onload = res; img.src = srcUrl; });
+  const tex = new THREE.Texture(img);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+
+  lastData = { tex, depth, w, h };
+  buildScene();
+  if (typeof enterOrbit === "function") enterOrbit();
+  camera.position.set(0, 0, 2.4);
+  orbit.target.set(0, 0, 0);
+  setStatus("Gemelo generado · orbita o pulsa «Recorrer el espacio»");
+}
+
+// ---- Inputs ----
+function handleFile(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  const url = URL.createObjectURL(file);
+  processImage(url);
+}
+
+document.getElementById("pick").onclick = () => document.getElementById("file").click();
+document.getElementById("file").onchange = (e) => handleFile(e.target.files[0]);
+document.getElementById("newPhoto").onclick = () => {
+  if (typeof enterOrbit === "function") enterOrbit();
+  drop.classList.remove("hide");
+  controls.style.display = "none";
+  if (typeof pollTimer !== "undefined") clearInterval(pollTimer);
+  const pp = document.getElementById("phonePanel");
+  const dzm = document.getElementById("dz");
+  if (pp) pp.style.display = "none";
+  if (dzm) dzm.style.display = "flex";
+  setStatus("Listo");
+};
+
+["dragenter", "dragover"].forEach((ev) =>
+  dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+["dragleave", "drop"].forEach((ev) =>
+  dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("over"); }));
+dz.addEventListener("drop", (e) => handleFile(e.dataTransfer.files[0]));
+
+["depthScale", "smooth", "pointMode"].forEach((id) =>
+  document.getElementById(id).addEventListener("input", buildScene));
+
+// ---- Importar desde móvil (requiere serve.py) ----
+const phonePanel = document.getElementById("phonePanel");
+const dzMain = document.getElementById("dz");
+let pollTimer = null, lastImgId = 0;
+
+async function startPhoneImport() {
+  let info;
+  try {
+    const r = await fetch("/info");
+    if (!r.ok) throw new Error("sin servidor");
+    info = await r.json();
+  } catch (e) {
+    setStatus("Importar desde móvil requiere el servidor local (serve.py)");
+    return;
+  }
+  // Si hay URL pública (Funnel de Tailscale), el móvil llega por internet (relay);
+  // si no, por la IP de la LAN (misma WiFi).
+  const url = info.public_url
+    ? `${info.public_url}/phone.html`
+    : `http://${info.lan_ip}:${info.port}/phone.html`;
+  document.getElementById("phoneUrl").textContent = url;
+  const qr = document.getElementById("qr");
+  qr.onload = () => { qr.style.display = "block"; };
+  qr.onerror = () => { qr.style.display = "none"; };
+  qr.src = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(url)}`;
+
+  dzMain.style.display = "none";
+  phonePanel.style.display = "flex";
+
+  // sincroniza el id actual para no traer una foto antigua
+  try {
+    const head = await fetch("/latest?since=0", { method: "GET", cache: "no-store" });
+    lastImgId = parseInt(head.headers.get("X-Image-Id") || "0", 10);
+    if (head.status === 200) lastImgId -= 1; // hay una pendiente: que entre
+  } catch {}
+
+  clearInterval(pollTimer);
+  pollTimer = setInterval(pollPhone, 1500);
+}
+
+async function pollPhone() {
+  try {
+    const r = await fetch("/latest?since=" + lastImgId, { cache: "no-store" });
+    if (r.status === 200) {
+      lastImgId = parseInt(r.headers.get("X-Image-Id") || (lastImgId + 1), 10);
+      const blob = await r.blob();
+      clearInterval(pollTimer);
+      const objUrl = URL.createObjectURL(blob);
+      processImage(objUrl);
+    }
+  } catch (e) { /* red intermitente: reintenta en el siguiente tick */ }
+}
+
+document.getElementById("fromPhone").onclick = startPhoneImport;
+
+setStatus(navigator.gpu ? "Listo · WebGPU" : "Listo · WASM");
+
+// Hook de depuración (prototipo): permite inyectar profundidad sintética sin el modelo
+window.__twin = {
+  inject(w, h) {
+    const depth = new Float32Array(w * h);
+    const cx = w / 2, cy = h / 2, maxr = Math.hypot(cx, cy);
+    const cnv = document.createElement("canvas"); cnv.width = w; cnv.height = h;
+    const ctx = cnv.getContext("2d");
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const r = Math.hypot(x - cx, y - cy) / maxr;     // 0 centro … 1 borde
+      depth[y * w + x] = 1 - r;                          // centro = cerca
+      ctx.fillStyle = `hsl(${Math.round(200 + 60 * r)} 70% ${30 + 40 * (1 - r)}%)`;
+      ctx.fillRect(x, y, 1, 1);
+    }
+    const tex = new THREE.CanvasTexture(cnv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    lastData = { tex, depth, w, h };
+    drop.classList.add("hide"); controls.style.display = "flex";
+    buildScene();
+    camera.position.set(0.6, 0.4, 2.2); orbit.target.set(0, 0, 0);
+    setStatus("Profundidad sintética (debug)");
+    return { ok: true, w, h };
+  }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="robots" content="noindex" />
+<title>Capturar · Gemelo del espacio</title>
+<style>
+  :root { --spine:#50c8ff; --spine-soft:rgba(80,200,255,.15); --bg:#060a12;
+    --ink:#e8f1fb; --muted:#8fa6bd; --ok:#37d39b; --err:#ff6b6b; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { margin:0; min-height:100%; background:var(--bg); color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; }
+  .wrap { max-width:520px; margin:0 auto; padding:24px 18px 40px;
+    display:flex; flex-direction:column; gap:18px; min-height:100vh; }
+  header { display:flex; align-items:center; gap:10px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--spine);
+    box-shadow:0 0 14px var(--spine); }
+  h1 { font-size:18px; margin:0; font-weight:650; }
+  p.lead { color:var(--muted); margin:0; line-height:1.5; font-size:14px; }
+  .preview { flex:1; min-height:220px; border:1.5px dashed var(--spine-soft);
+    border-radius:16px; display:flex; align-items:center; justify-content:center;
+    overflow:hidden; background:#0a1320; }
+  .preview img { width:100%; height:100%; object-fit:contain; display:none; }
+  .preview .ph { color:var(--muted); font-size:14px; text-align:center; padding:24px; }
+  .btn { display:flex; align-items:center; justify-content:center; gap:10px;
+    padding:16px; border-radius:14px; font-size:16px; font-weight:600; cursor:pointer;
+    border:1px solid var(--spine); background:transparent; color:var(--spine); width:100%; }
+  .btn.primary { background:var(--spine); color:#04121d; }
+  .btn[disabled] { opacity:.4; pointer-events:none; }
+  input[type=file] { display:none; }
+  .status { font-size:14px; text-align:center; min-height:20px; color:var(--muted); }
+  .status.ok { color:var(--ok); } .status.err { color:var(--err); }
+  .meta { font-size:12px; color:var(--muted); text-align:center; word-break:break-all; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header><span class="dot"></span><h1>Capturar para el gemelo</h1></header>
+    <p class="lead">Haz una foto del local. Se enviar&aacute; al ordenador y se
+       generar&aacute; el gemelo digital del espacio.</p>
+
+    <div class="preview">
+      <img id="prev" alt="" />
+      <div class="ph" id="ph">La vista previa aparecer&aacute; aqu&iacute;</div>
+    </div>
+
+    <label class="btn primary" for="cam">📷 Hacer foto</label>
+    <input id="cam" type="file" accept="image/*" capture="environment" />
+
+    <label class="btn" for="gal">🖼️ Elegir de la galer&iacute;a</label>
+    <input id="gal" type="file" accept="image/*" />
+
+    <button class="btn primary" id="send" disabled>Enviar al ordenador</button>
+    <div class="status" id="status"></div>
+    <div class="meta" id="meta"></div>
+  </div>
+
+<script>
+  const prev = document.getElementById("prev");
+  const ph = document.getElementById("ph");
+  const sendBtn = document.getElementById("send");
+  const status = document.getElementById("status");
+  const meta = document.getElementById("meta");
+  let file = null;
+
+  function setStatus(msg, cls="") { status.textContent = msg; status.className = "status " + cls; }
+
+  function onPick(f) {
+    if (!f || !f.type.startsWith("image/")) { setStatus("Eso no es una imagen", "err"); return; }
+    file = f;
+    const url = URL.createObjectURL(f);
+    prev.src = url; prev.style.display = "block"; ph.style.display = "none";
+    sendBtn.disabled = false;
+    setStatus(`Lista para enviar · ${(f.size/1024/1024).toFixed(1)} MB`);
+  }
+
+  document.getElementById("cam").onchange = (e) => onPick(e.target.files[0]);
+  document.getElementById("gal").onchange = (e) => onPick(e.target.files[0]);
+
+  sendBtn.onclick = async () => {
+    if (!file) return;
+    sendBtn.disabled = true;
+    setStatus("Enviando…");
+    try {
+      const r = await fetch("upload", {
+        method: "POST",
+        headers: { "Content-Type": file.type || "image/jpeg" },
+        body: file
+      });
+      const j = await r.json();
+      if (j.ok) {
+        setStatus("✓ Enviada al ordenador. Mira la pantalla del Mac.", "ok");
+        meta.textContent = `${(j.bytes/1024/1024).toFixed(1)} MB · #${j.id}`;
+      } else { throw new Error("respuesta inesperada"); }
+    } catch (e) {
+      setStatus("No se pudo enviar. ¿Mismo WiFi que el Mac? " + e.message, "err");
+      sendBtn.disabled = false;
+    }
+  };
+</script>
+</body>
+</html>
