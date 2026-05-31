@@ -119,6 +119,7 @@
       <button class="cta" id="pick">Elegir foto</button>
       <span class="hint">o arrastra una imagen aquí</span>
       <button class="cta" id="fromPhone" style="border-color:var(--muted);color:var(--muted)">📱 Importar desde móvil</button>
+      <button class="cta" id="fromGlasses" style="border-color:var(--spine);color:var(--spine)">👓 Desde las gafas</button>
     </div>
     <input type="file" id="file" accept="image/*" />
 
@@ -129,6 +130,12 @@
       <div class="hint">o abre en el navegador del móvil:</div>
       <div id="phoneUrl" style="color:var(--spine); font-size:15px; word-break:break-all"></div>
       <div class="hint" id="phoneWait">⏳ Esperando foto del móvil…</div>
+    </div>
+
+    <div class="dz" id="glassesPanel" style="display:none; gap:14px; max-width:560px;">
+      <div class="hint">👓 Elige una captura de las <b style="color:var(--spine)">gafas Meta</b> para hacer su gemelo</div>
+      <div id="glassesGrid" style="display:grid; grid-template-columns:repeat(3,1fr); gap:8px; width:100%; max-height:300px; overflow:auto;"></div>
+      <div class="hint" id="glassesWait">Cargando capturas…</div>
     </div>
   </div>
 
@@ -487,8 +494,10 @@ document.getElementById("newPhoto").onclick = () => {
   controls.style.display = "none";
   if (typeof pollTimer !== "undefined") clearInterval(pollTimer);
   const pp = document.getElementById("phonePanel");
+  const gp = document.getElementById("glassesPanel");
   const dzm = document.getElementById("dz");
   if (pp) pp.style.display = "none";
+  if (gp) gp.style.display = "none";
   if (dzm) dzm.style.display = "flex";
   setStatus("Listo");
 };
@@ -556,6 +565,77 @@ async function pollPhone() {
 }
 
 document.getElementById("fromPhone").onclick = startPhoneImport;
+
+// ---- Importar desde las gafas (fotos reales del diario) ----
+const glassesPanel = document.getElementById("glassesPanel");
+const glassesGrid = document.getElementById("glassesGrid");
+const glassesWait = document.getElementById("glassesWait");
+const CDN_DIARY = "https://csilvasantin.github.io/18.-diario";
+let glassesMode = "local"; // "local" (serve.py) | "cdn"
+
+function glassesPhotoUrl(file) {
+  return glassesMode === "local"
+    ? "/glasses-photo?file=" + encodeURIComponent(file)
+    : CDN_DIARY + "/" + file;
+}
+
+async function loadGlassesManifest() {
+  // Primero el servidor local (mismo origen, sin CORS, va sin cobertura).
+  try {
+    const r = await fetch("/glasses-manifest", { cache: "no-store" });
+    if (r.ok) { glassesMode = "local"; return await r.json(); }
+  } catch (e) { /* sin serve.py: probamos el CDN */ }
+  // Fallback: manifest público del diario (requiere red).
+  const r2 = await fetch(CDN_DIARY + "/media/glasses/manifest.json", { cache: "no-store" });
+  if (!r2.ok) throw new Error("sin manifest");
+  glassesMode = "cdn";
+  return await r2.json();
+}
+
+function flattenPhotos(manifest) {
+  const out = [];
+  const days = (manifest && manifest.days) || {};
+  for (const date of Object.keys(days)) {
+    for (const it of (days[date].items || [])) {
+      if (it.type === "photo" && it.file) out.push({ file: it.file, id: it.id || "", date: it.date || date });
+    }
+  }
+  // más recientes primero (por fecha y luego por id, que empieza por timestamp)
+  out.sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+  return out;
+}
+
+async function startGlassesImport() {
+  dzMain.style.display = "none";
+  phonePanel.style.display = "none";
+  glassesPanel.style.display = "flex";
+  glassesGrid.innerHTML = "";
+  glassesWait.style.display = "block";
+  glassesWait.textContent = "Cargando capturas…";
+  let photos;
+  try {
+    photos = flattenPhotos(await loadGlassesManifest());
+  } catch (e) {
+    glassesWait.textContent = "No se pudieron cargar las capturas (sin servidor local ni red).";
+    return;
+  }
+  if (!photos.length) { glassesWait.textContent = "Aún no hay fotos de las gafas."; return; }
+  glassesWait.style.display = "none";
+  photos.slice(0, 18).forEach((p) => {
+    const url = glassesPhotoUrl(p.file);
+    const cell = document.createElement("button");
+    cell.style.cssText = "border:1px solid var(--spine-soft);border-radius:10px;overflow:hidden;" +
+      "padding:0;cursor:pointer;aspect-ratio:1;background:#0a1320;";
+    const im = document.createElement("img");
+    im.src = url; im.alt = p.id; im.loading = "lazy";
+    im.style.cssText = "width:100%;height:100%;object-fit:cover;display:block;";
+    cell.appendChild(im);
+    cell.onclick = () => processImage(url);
+    glassesGrid.appendChild(cell);
+  });
+}
+
+document.getElementById("fromGlasses").onclick = startGlassesImport;
 
 setStatus(navigator.gpu ? "Listo · WebGPU" : "Listo · WASM");
 

@@ -23,6 +23,10 @@ PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 8090
 # Se pasa como argv[2] o variable de entorno TWIN_PUBLIC_URL. Sin barra final.
 PUBLIC_URL = (sys.argv[2] if len(sys.argv) > 2 else os.environ.get("TWIN_PUBLIC_URL", "")).rstrip("/")
 DIR = os.path.dirname(os.path.abspath(__file__))
+# Carpeta del diario (de donde salen las fotos reales de las gafas). El sync las
+# deja en media/glasses/<fecha>/<id>.jpg e indexa en manifest.json.
+DIARY_DIR = os.environ.get("DIARY_DIR", os.path.expanduser("~/Projects/csilvasantin/18.-diario"))
+GMEDIA = os.path.realpath(os.path.join(DIARY_DIR, "media", "glasses"))
 
 state = {"id": 0, "bytes": None, "ctype": "image/jpeg"}
 lock = threading.Lock()
@@ -59,6 +63,45 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path == "/info":
             return self._json({"lan_ip": lan_ip(), "port": PORT, "public_url": PUBLIC_URL})
+        if u.path == "/glasses-manifest":
+            # Manifest local de las fotos de las gafas (mismo origen -> sin CORS).
+            mpath = os.path.join(GMEDIA, "manifest.json")
+            try:
+                with open(mpath, "rb") as f:
+                    data = f.read()
+            except OSError:
+                return self._json({"error": "sin manifest de gafas", "path": mpath}, 404)
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if u.path == "/glasses-photo":
+            # Sirve una foto de las gafas por su ruta relativa del manifest
+            # (media/glasses/<fecha>/<id>.jpg). Se valida que no escape de GMEDIA.
+            rel = parse_qs(u.query).get("file", [""])[0]
+            target = os.path.realpath(os.path.join(DIARY_DIR, rel))
+            if not rel or os.path.commonpath([target, GMEDIA]) != GMEDIA or not os.path.isfile(target):
+                return self._json({"error": "foto no encontrada"}, 404)
+            ext = os.path.splitext(target)[1].lower()
+            ctype = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
+                     "mp4": "video/mp4"}.get(ext.lstrip("."), "application/octet-stream")
+            try:
+                with open(target, "rb") as f:
+                    data = f.read()
+            except OSError:
+                return self._json({"error": "no se pudo leer la foto"}, 500)
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "max-age=3600")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if u.path == "/latest":
             since = int(parse_qs(u.query).get("since", ["0"])[0])
             with lock:
