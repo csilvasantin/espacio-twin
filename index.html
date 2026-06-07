@@ -71,6 +71,36 @@
   .navpad button:active { background: var(--spine); color: #04121d; }
   .np-f { grid-area: 1 / 2; } .np-l { grid-area: 2 / 1; }
   .np-b { grid-area: 3 / 2; } .np-r { grid-area: 2 / 3; }
+
+  /* Fichas de métricas de audiencia ancladas a cada pantalla 3D */
+  .scard { position: absolute; transform: translate(-50%, 12px); pointer-events: auto;
+    background: rgba(8, 14, 24, 0.92); backdrop-filter: blur(8px);
+    border: 1px solid var(--spine-soft); border-radius: 12px; padding: 10px 12px;
+    width: 196px; font-size: 12px; color: var(--ink); box-shadow: 0 8px 30px rgba(0,0,0,.45);
+    transition: opacity .2s; }
+  .scard.dim { opacity: .25; }
+  .scard .t { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+  .scard .t b { font-weight: 650; font-size: 13px; }
+  .scard .live { font-size: 10px; color: #6ef0a0; border: 1px solid rgba(110,240,160,.4);
+    padding: 2px 6px; border-radius: 999px; }
+  .scard .live.sim { color: #ffcf6e; border-color: rgba(255,207,110,.4); }
+  .scard .np { color: var(--spine); font-size: 12px; margin-bottom: 8px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis; }
+  .scard .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px; }
+  .scard .kpi { display: flex; flex-direction: column; gap: 1px; }
+  .scard .kpi .n { font-size: 17px; font-weight: 650; line-height: 1; }
+  .scard .kpi .l { font-size: 10px; color: var(--muted); }
+  .scard .bar { height: 5px; border-radius: 999px; background: rgba(255,255,255,.1); margin-top: 8px; overflow: hidden; }
+  .scard .bar i { display: block; height: 100%; background: linear-gradient(90deg,#50c8ff,#6ef0a0); }
+  .scard .seg { display: flex; gap: 6px; margin-top: 8px; font-size: 10px; color: var(--muted); flex-wrap: wrap; }
+  .scard .seg span b { color: var(--ink); font-weight: 600; }
+  .scard .x { cursor: pointer; color: var(--muted); border: none; background: none; font-size: 14px; padding: 0; }
+  .litem { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  .litem input { flex: 1; min-width: 0; background: #0a1320; border: 1px solid var(--spine-soft);
+    color: var(--ink); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
+  .litem button { background: none; border: 1px solid var(--spine-soft); color: var(--muted);
+    border-radius: 8px; cursor: pointer; padding: 5px 8px; font-size: 12px; }
+  body.placing { cursor: crosshair; }
 </style>
 </head>
 <body>
@@ -100,9 +130,24 @@
     </div>
     <button class="cta" id="modeBtn" style="justify-content:center">🚶 Recorrer el espacio</button>
     <button class="cta" id="isoBtn" style="justify-content:center">📐 Vista isométrica</button>
+    <button class="cta" id="liveBtn" style="justify-content:center">🖥️ Modo Live (pantallas)</button>
     <button class="cta" id="newPhoto" style="justify-content:center">Otra foto</button>
     <div class="hint" id="navHint">Arrastra para orbitar · rueda para acercar</div>
   </div>
+
+  <!-- Panel del modo Live: alta/asignación de pantallas reales del circuito -->
+  <div class="hud panel" id="livePanel" style="display:none; top:64px; right:18px; width:260px;">
+    <div class="row" style="margin-bottom:8px">
+      <b style="font-size:14px">🖥️ Pantallas del espacio</b>
+      <span class="badge" id="liveSrc">—</span>
+    </div>
+    <div id="liveList" style="display:flex; flex-direction:column; gap:8px; max-height:40vh; overflow:auto;"></div>
+    <button class="cta" id="addScreen" style="justify-content:center; margin-top:10px; font-size:13px; padding:9px 14px;">+ Añadir pantalla</button>
+    <div class="hint" id="liveHint" style="margin-top:8px">Pulsa «Añadir» y luego clic en el espacio para colocar la pantalla.</div>
+  </div>
+
+  <!-- Capa HTML de fichas de métricas, ancladas sobre cada pantalla 3D -->
+  <div id="liveOverlay" style="position:fixed; inset:0; z-index:12; pointer-events:none;"></div>
 
   <div class="navpad" id="navpad">
     <button class="np-f" data-move="f">▲</button>
@@ -638,6 +683,259 @@ async function startGlassesImport() {
 document.getElementById("fromGlasses").onclick = startGlassesImport;
 
 setStatus(navigator.gpu ? "Listo · WebGPU" : "Listo · WASM");
+
+// ════════════════════════════════════════════════════════════════════
+//  CAPA LIVE — pantallas reales del circuito dentro del gemelo
+//  Cada pantalla colocada espeja EN VIVO lo que emite /signage/now y
+//  muestra la audiencia/atribución que mide el edge (/signage/audience).
+//  Cierra el relato "twin = realidad" + el bucle de medición agéntico.
+// ════════════════════════════════════════════════════════════════════
+const WORKER = "https://pixer-eleven.csilvasantin.workers.dev";
+const LIVE_KEY = "twin_live_screens_v1";
+const liveBtn = document.getElementById("liveBtn");
+const livePanel = document.getElementById("livePanel");
+const liveOverlay = document.getElementById("liveOverlay");
+const liveList = document.getElementById("liveList");
+const liveSrcBadge = document.getElementById("liveSrc");
+const liveHint = document.getElementById("liveHint");
+const live = { on: false, placing: false, screens: [], pollTimer: null, seq: 0 };
+const _raycaster = new THREE.Raycaster();
+const _ndc = new THREE.Vector2();
+const _projV = new THREE.Vector3();
+
+function activeCam() { return mode === "iso" ? isoCam : camera; }
+
+function loadSavedScreens() {
+  try { return JSON.parse(localStorage.getItem(LIVE_KEY)) || []; } catch { return []; }
+}
+function saveScreens() {
+  const data = live.screens.map(s => ({ id: s.id, pos: [s.group.position.x, s.group.position.y, s.group.position.z] }));
+  try { localStorage.setItem(LIVE_KEY, JSON.stringify(data)); } catch {}
+}
+
+// Textura de "marcador de posición" cuando no hay creativo (hueco disponible / idle).
+function placeholderTexture(label) {
+  const c = document.createElement("canvas"); c.width = 512; c.height = 288;
+  const x = c.getContext("2d");
+  x.fillStyle = "#0a1320"; x.fillRect(0, 0, 512, 288);
+  x.strokeStyle = "#1f3550"; x.lineWidth = 4; x.strokeRect(8, 8, 496, 272);
+  x.fillStyle = "#50c8ff"; x.font = "600 30px system-ui"; x.textAlign = "center";
+  x.fillText(label || "Hueco disponible", 256, 150);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+
+function buildScreenObject(def) {
+  const W = 0.34, H = W * 9 / 16;
+  const group = new THREE.Group();
+  group.position.set(def.pos[0], def.pos[1], def.pos[2]);
+  // marco
+  const frame = new THREE.Mesh(
+    new THREE.PlaneGeometry(W + 0.03, H + 0.03),
+    new THREE.MeshBasicMaterial({ color: 0x0a121e, side: THREE.DoubleSide })
+  );
+  frame.position.z = -0.001;
+  const mat = new THREE.MeshBasicMaterial({ map: placeholderTexture(), side: THREE.DoubleSide });
+  const monitor = new THREE.Mesh(new THREE.PlaneGeometry(W, H), mat);
+  // borde luminoso
+  const edge = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.PlaneGeometry(W + 0.03, H + 0.03)),
+    new THREE.LineBasicMaterial({ color: 0x50c8ff })
+  );
+  group.add(frame, monitor, edge);
+  scene.add(group);
+
+  const card = document.createElement("div");
+  card.className = "scard";
+  liveOverlay.appendChild(card);
+
+  return { id: def.id, group, monitor, mat, edge, card, videoEl: null, lastSrc: undefined, data: null };
+}
+
+function setScreenContent(s, np) {
+  const src = np && np.kind !== "idle" ? np.src : null;
+  if (src === s.lastSrc) return;
+  s.lastSrc = src;
+  // limpiar vídeo anterior
+  if (s.videoEl) { try { s.videoEl.pause(); } catch {} s.videoEl.src = ""; s.videoEl = null; }
+  if (s.mat.map) s.mat.map.dispose();
+  if (!src) { s.mat.map = placeholderTexture(np && np.name ? np.name : "Hueco disponible"); s.mat.needsUpdate = true; return; }
+  if (np.kind === "video") {
+    const v = document.createElement("video");
+    v.crossOrigin = "anonymous";  // WebGL exige textura CORS-limpia
+    v.src = src; v.loop = true; v.muted = true; v.autoplay = true; v.playsInline = true;
+    v.play().catch(() => {});
+    const t = new THREE.VideoTexture(v); t.colorSpace = THREE.SRGBColorSpace;
+    s.videoEl = v; s.mat.map = t; s.mat.needsUpdate = true;
+  } else {
+    const img = new Image();
+    img.crossOrigin = "anonymous";  // WebGL exige textura CORS-limpia
+    img.onload = () => {
+      // Guarda anti-taint: si la imagen no es CORS-limpia (p.ej. un host que
+      // redirige sin cabeceras), no la subimos como textura (rompería el render
+      // cada frame); mostramos placeholder. Los creativos de /signage/media sí lo son.
+      try {
+        const cv = document.createElement("canvas"); cv.width = 2; cv.height = 2;
+        const cx = cv.getContext("2d"); cx.drawImage(img, 0, 0, 2, 2); cx.getImageData(0, 0, 1, 1);
+      } catch (e) { s.mat.map = placeholderTexture((np.name || "creativo") + " ⚠ sin CORS"); s.mat.needsUpdate = true; return; }
+      const t = new THREE.Texture(img); t.colorSpace = THREE.SRGBColorSpace; t.needsUpdate = true; s.mat.map = t; s.mat.needsUpdate = true;
+    };
+    img.onerror = () => { s.mat.map = placeholderTexture("(sin imagen)"); s.mat.needsUpdate = true; };
+    img.src = src;
+  }
+}
+
+function renderCard(s) {
+  const d = s.data; if (!d) { s.card.innerHTML = '<div class="np">Cargando…</div>'; return; }
+  const np = d.nowPlaying && d.nowPlaying.kind !== "idle" ? (d.nowPlaying.name || "creativo") : "— hueco libre —";
+  const liveTag = d.source === "live"
+    ? '<span class="live">● LIVE</span>'
+    : '<span class="live sim">◦ SIM</span>';
+  const now = d.now || {}, today = d.today || {};
+  const top = (today.byCreative && today.byCreative[0]) ? today.byCreative[0] : null;
+  const fmt = (n) => n >= 1000 ? (n / 1000).toFixed(1) + "k" : String(n || 0);
+  const segF = (now.demo && (now.demo.f + now.demo.m)) ? Math.round(now.demo.f / (now.demo.f + now.demo.m) * 100) : 0;
+  s.card.innerHTML =
+    `<div class="t"><b>${s.id}</b><span style="display:flex;gap:6px;align-items:center">${liveTag}<button class="x" title="quitar">✕</button></span></div>` +
+    `<div class="np">▶ ${np}</div>` +
+    `<div class="grid2">` +
+      `<div class="kpi"><span class="n">👁 ${fmt(now.present)}</span><span class="l">viendo ahora</span></div>` +
+      `<div class="kpi"><span class="n">${fmt(today.eyes)}</span><span class="l">ojos hoy</span></div>` +
+    `</div>` +
+    `<div class="bar"><i style="width:${now.attention || 0}%"></i></div>` +
+    `<div class="seg"><span>atención <b>${now.attention || 0}%</b></span><span>♀ <b>${segF}%</b> / ♂ <b>${100 - segF}%</b></span></div>` +
+    (top ? `<div class="seg"><span>top hoy: <b>${top.name}</b> · ${fmt(top.eyes)} 👁</span></div>` : "");
+  s.card.querySelector(".x").onclick = () => removeScreen(s);
+}
+
+function renderList() {
+  liveList.innerHTML = "";
+  if (!live.screens.length) { liveList.innerHTML = '<div class="hint">Sin pantallas. Pulsa «Añadir».</div>'; return; }
+  live.screens.forEach((s) => {
+    const row = document.createElement("div"); row.className = "litem";
+    const inp = document.createElement("input"); inp.value = s.id; inp.title = "ID de pantalla (/signage)";
+    inp.onchange = () => { s.id = (inp.value.trim() || s.id).replace(/[^a-z0-9_-]/gi, "-"); inp.value = s.id; s.lastSrc = undefined; s.data = null; saveScreens(); pollLive(); };
+    const del = document.createElement("button"); del.textContent = "✕"; del.onclick = () => removeScreen(s);
+    row.append(inp, del); liveList.appendChild(row);
+  });
+}
+
+function removeScreen(s) {
+  scene.remove(s.group);
+  s.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) { if (o.material.map) o.material.map.dispose(); o.material.dispose(); } });
+  if (s.videoEl) { try { s.videoEl.pause(); } catch {} s.videoEl = null; }
+  s.card.remove();
+  live.screens = live.screens.filter(x => x !== s);
+  saveScreens(); renderList();
+}
+
+function addScreenAt(pos) {
+  live.seq = Math.max(live.seq, live.screens.length) + 1;
+  const def = { id: "screen-twin-" + live.seq, pos: [pos.x, pos.y, pos.z] };
+  const s = buildScreenObject(def);
+  live.screens.push(s); saveScreens(); renderList(); pollLive();
+}
+
+// Colocar pantalla con un clic sobre la malla del espacio (o, si no hay malla,
+// a una distancia fija delante de la cámara).
+function armPlacement() {
+  if (!live.on) return;
+  live.placing = true; document.body.classList.add("placing");
+  liveHint.textContent = "Haz clic en el espacio para colocar la pantalla.";
+}
+function handlePlacementClick(ev) {
+  if (!live.placing) return;
+  live.placing = false; document.body.classList.remove("placing");
+  liveHint.textContent = "Pulsa «Añadir» y luego clic en el espacio para colocar la pantalla.";
+  const rect = canvasEl.getBoundingClientRect();
+  _ndc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+  _ndc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+  const cam = activeCam();
+  _raycaster.setFromCamera(_ndc, cam);
+  let pos = null;
+  if (meshObj) { const hit = _raycaster.intersectObject(meshObj, false)[0]; if (hit) pos = hit.point.clone().addScaledVector(_raycaster.ray.direction, -0.25); }
+  if (!pos) { pos = new THREE.Vector3(); cam.getWorldDirection(pos); pos.multiplyScalar(1.4).add(cam.position); }
+  addScreenAt(pos);
+}
+
+async function pollLive() {
+  if (!live.on || !live.screens.length) return;
+  const ids = [...new Set(live.screens.map(s => s.id))].join(",");
+  try {
+    const r = await fetch(`${WORKER}/signage/audience?screens=${encodeURIComponent(ids)}`, { cache: "no-store" });
+    const j = await r.json();
+    const byId = {}; (j.screens || []).forEach(x => { byId[x.screen] = x; });
+    let anyLive = false;
+    live.screens.forEach((s) => {
+      const d = byId[s.id]; if (!d) return;
+      s.data = d; setScreenContent(s, d.nowPlaying); renderCard(s);
+      if (d.source === "live") anyLive = true;
+    });
+    liveSrcBadge.textContent = anyLive ? "edge ●" : "simulación";
+    liveSrcBadge.style.color = anyLive ? "#6ef0a0" : "#ffcf6e";
+  } catch (e) { liveSrcBadge.textContent = "sin conexión"; }
+}
+
+// Billboard de las pantallas hacia la cámara + reposición de las fichas HTML.
+(function liveRenderLoop() {
+  requestAnimationFrame(liveRenderLoop);
+  if (!live.on || !live.screens.length) return;
+  const cam = activeCam();
+  for (const s of live.screens) {
+    s.group.quaternion.copy(cam.quaternion);
+    _projV.copy(s.group.position).project(cam);
+    const behind = _projV.z > 1;
+    if (behind) { s.card.style.display = "none"; continue; }
+    s.card.style.display = "block";
+    const cw = s.card.offsetWidth || 196, chh = s.card.offsetHeight || 120;
+    const lx = Math.max(cw / 2 + 6, Math.min(innerWidth - cw / 2 - 6, (_projV.x * 0.5 + 0.5) * innerWidth));
+    const ty = Math.max(6, Math.min(innerHeight - chh - 6, (-_projV.y * 0.5 + 0.5) * innerHeight));
+    s.card.style.left = lx + "px";
+    s.card.style.top = ty + "px";
+    // atenúa solo si la cámara está muy lejos de la pantalla (distancia real)
+    s.card.classList.toggle("dim", cam.position.distanceTo(s.group.position) > 4.5);
+  }
+})();
+
+function enterLive() {
+  if (!lastData) { setStatus("Primero genera un gemelo (sube una foto)"); return; }
+  live.on = true;
+  livePanel.style.display = "block";
+  liveOverlay.style.display = "block";
+  liveBtn.textContent = "🖥️ Salir de Live";
+  // reconstruye desde lo guardado; si está vacío, coloca 2 pantallas demo
+  if (!live.screens.length) {
+    const saved = loadSavedScreens();
+    if (saved.length) {
+      saved.forEach(def => { live.seq++; live.screens.push(buildScreenObject({ id: def.id, pos: def.pos })); });
+    } else {
+      [[-0.5, 0.28, 0.4], [0.5, 0.28, 0.4]].forEach((p, i) => {
+        live.screens.push(buildScreenObject({ id: "screen-twin-" + (i + 1), pos: p }));
+      });
+      live.seq = 2; saveScreens();
+    }
+  } else {
+    live.screens.forEach(s => { s.group.visible = true; s.card.style.display = "block"; });
+  }
+  renderList();
+  pollLive();
+  clearInterval(live.pollTimer); live.pollTimer = setInterval(pollLive, 3000);
+  setStatus("Modo Live · las pantallas espejan /signage/now y miden audiencia");
+}
+
+function exitLive() {
+  live.on = false;
+  clearInterval(live.pollTimer); live.pollTimer = null;
+  livePanel.style.display = "none";
+  liveOverlay.style.display = "none";
+  liveBtn.textContent = "🖥️ Modo Live (pantallas)";
+  live.screens.forEach(s => { s.group.visible = false; s.card.style.display = "none"; });
+  setStatus("Listo");
+}
+
+liveBtn.onclick = () => (live.on ? exitLive() : enterLive());
+document.getElementById("addScreen").onclick = armPlacement;
+// el clic de colocación se evalúa ANTES del pointerlock del modo walk
+canvasEl.addEventListener("pointerdown", handlePlacementClick, true);
 
 // Hook de depuración (prototipo): permite inyectar profundidad sintética sin el modelo
 window.__twin = {
